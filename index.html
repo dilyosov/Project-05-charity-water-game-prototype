@@ -5,47 +5,64 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>Clean Drop Runner</title>
 
+	<!-- Add inline favicon to avoid browser requesting /favicon.ico (prevents 404) -->
+	<link rel="icon" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="%232E9DF7"/><text x="8" y="11" font-size="9" text-anchor="middle" fill="%23fff" font-family="Arial,sans-serif">CW</text></svg>'>
+
 	<!-- Bootstrap CSS (for modal) -->
 	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="" crossorigin="anonymous">
 
 	<link rel="stylesheet" href="styles.css">
 
     <!-- Prevent connection errors from the injected LivePreview WebSocket.
-         If a script tries to open a WebSocket to the broken zany-space-engine host,
-         rewrite it to a public echo WebSocket (wss://echo.websocket.events).
-         This avoids the console NotConnected/NotSupported errors during development.
+         Use a safe wrapper that blocks known problematic hostnames (zany-space-engine)
+         and returns a harmless dummy socket object instead of attempting to connect.
     -->
     <script>
-        (function() {
-            // Keep original reference
-            const _WS = window.WebSocket;
-            // If no WebSocket support, do nothing
-            if (typeof _WS !== 'function' && typeof _WS !== 'object') return;
-            // Create a small subclass that rewrites the URL if needed
-            try {
-                class SafeWebSocket extends _WS {
-                    constructor(url, protocols) {
-                        // Detect the problematic host and replace it
-                        if (typeof url === 'string' && url.includes('zany-space-engine')) {
-                            console.info('LivePreview WebSocket URL replaced to avoid error:', url);
-                            url = 'wss://echo.websocket.events';
-                        }
-                        super(url, protocols);
-                    }
-                }
-                // Replace global WebSocket
-                window.WebSocket = SafeWebSocket;
-            } catch (e) {
-                // Fallback: if subclassing fails in some environments, wrap constructor
-                window.WebSocket = function(url, protocols) {
-                    if (typeof url === 'string' && url.includes('zany-space-engine')) {
-                        console.info('LivePreview WebSocket URL replaced to avoid error:', url);
-                        url = 'wss://echo.websocket.events';
-                    }
-                    return new _WS(url, protocols);
+        (function(){
+            // keep original reference
+            const NativeWS = window.WebSocket;
+            // If WebSocket is not available, do nothing
+            if (typeof NativeWS === 'undefined') return;
+
+            // Helper to create a simple dummy socket object that won't throw
+            function makeDummySocket() {
+                const dummy = {
+                    // mimic readyState CLOSED
+                    readyState: 3,
+                    send() {},
+                    close() {},
+                    addEventListener() {},
+                    removeEventListener() {},
+                    dispatchEvent() { return false; },
+                    // allow assignment of handlers without throwing
+                    onopen: null, onmessage: null, onerror: null, onclose: null
                 };
-                window.WebSocket.prototype = _WS.prototype;
+                return dummy;
             }
+
+            // Replace global WebSocket with a safe wrapper function
+            window.WebSocket = function(url, protocols) {
+                try {
+                    if (typeof url === 'string' && url.includes('zany-space-engine')) {
+                        // block attempts to contact the known problematic host used by some live previews
+                        console.info('Blocked LivePreview WebSocket URL to avoid error:', url);
+                        return makeDummySocket();
+                    }
+                    // Otherwise try to construct native socket
+                    return new NativeWS(url, protocols);
+                } catch (err) {
+                    // If construction throws (network issues, invalid URL), return dummy instead of throwing
+                    console.warn('WebSocket creation failed for', url, err);
+                    return makeDummySocket();
+                }
+            };
+
+            // Preserve prototype and static properties so code checking them still works
+            window.WebSocket.prototype = NativeWS.prototype;
+            // copy over numeric constants if present
+            ['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(k => {
+                if (NativeWS[k] !== undefined) window.WebSocket[k] = NativeWS[k];
+            });
         })();
     </script>
 </head>
